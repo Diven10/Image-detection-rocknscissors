@@ -116,7 +116,7 @@
           <div className="min-h-screen relative flex items-center justify-center p-4 font-mono select-none tactical-grid">
             
             {/* THE FIX: Changed 'hidden' to a 1px invisible dot so the browser doesn't freeze the camera */}
-            <video ref={videoRef} autoPlay playsInline muted className="absolute opacity-0 w-[1px] h-[1px] -z-10"></video>
+            <video ref={videoRef} autoPlay playsInline muted className="fixed top-[-9999px] left-[-9999px]"></video>
             <canvas ref={canvasRef} width="400" height="300" className="hidden"></canvas>
             
             <div className="absolute top-10 left-10 text-[10px] text-green-500/20 hidden md:block">
