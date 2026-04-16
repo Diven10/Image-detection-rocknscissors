@@ -47,7 +47,6 @@
           linear-gradient(90deg, rgba(0, 255, 0, 0.03) 1px, transparent 1px);
         background-size: 40px 40px;
       }
-      /* Custom jagged font for the MARS sticker */
     </style>
   </head>
   <body class="bg-[#050505] overflow-hidden">
@@ -56,6 +55,49 @@
     <script type="text/babel">
       const VisionRPSConsole = () => {
         const [page, setPage] = React.useState("HOME");
+        
+        // --- ADDED FOR CLOUD CAMERA ---
+        const [processedFrame, setProcessedFrame] = React.useState("");
+        const videoRef = React.useRef(null);
+        const canvasRef = React.useRef(null);
+        const [streamActive, setStreamActive] = React.useState(false);
+
+        // Turn on webcam when entering GAME
+        React.useEffect(() => {
+            if (page === 'GAME' && !streamActive) {
+                navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+                    if (videoRef.current) videoRef.current.srcObject = stream;
+                    setStreamActive(true);
+                }).catch(err => console.error("Webcam error:", err));
+            }
+        }, [page, streamActive]);
+
+        // Send frames to Python 10 times a second
+        React.useEffect(() => {
+            let interval;
+            let isProcessing = false;
+            if (page === 'GAME' && streamActive) {
+                interval = setInterval(async () => {
+                    if (isProcessing || !videoRef.current || !canvasRef.current) return;
+                    isProcessing = true;
+                    const context = canvasRef.current.getContext('2d');
+                    context.drawImage(videoRef.current, 0, 0, 400, 300);
+                    const data = canvasRef.current.toDataURL('image/jpeg', 0.5);
+                    try {
+                        const res = await fetch('/process_frame', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: data })
+                        });
+                        const json = await res.json();
+                        setProcessedFrame(json.image);
+                    } catch(e) {}
+                    isProcessing = false;
+                }, 100); 
+            }
+            return () => clearInterval(interval);
+        }, [page, streamActive]);
+        // ------------------------------
 
         const resetScores = async () => {
           try {
@@ -68,6 +110,11 @@
 
         return (
           <div className="min-h-screen relative flex items-center justify-center p-4 font-mono select-none tactical-grid">
+            
+            {/* --- HIDDEN ELEMENTS FOR CAMERA --- */}
+            <video ref={videoRef} autoPlay playsInline muted className="hidden"></video>
+            <canvas ref={canvasRef} width="400" height="300" className="hidden"></canvas>
+            
             {/* Ambient Background Details */}
             <div className="absolute top-10 left-10 text-[10px] text-green-500/20 hidden md:block">
               SYS.INIT(100)
@@ -136,8 +183,9 @@
                       </span>
                     </div>
                     <div className="flex-grow border border-[#4ADE80] bg-black/50 mb-2 relative overflow-hidden">
+                      {/* CHANGED IMG SRC HERE FOR CLOUD SUPPORT */}
                       <img
-                        src="{{ url_for('video_feed') }}"
+                        src={processedFrame || ""}
                         className="w-full h-full object-cover"
                         alt="Camera Feed"
                       />
