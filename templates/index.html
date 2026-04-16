@@ -10,42 +10,19 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
       .custom-scanlines::after {
-        content: " ";
-        display: block;
-        position: absolute;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        right: 0;
-        background:
-          linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
-          linear-gradient(
-            90deg,
-            rgba(255, 0, 0, 0.06),
-            rgba(0, 255, 0, 0.02),
-            rgba(0, 0, 255, 0.06)
-          );
-        z-index: 2;
-        background-size:
-          100% 2px,
-          3px 100%;
-        pointer-events: none;
+        content: " "; display: block; position: absolute; top: 0; left: 0; bottom: 0; right: 0;
+        background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+          linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+        z-index: 2; background-size: 100% 2px, 3px 100%; pointer-events: none;
       }
       .radar-bg {
-        background-image:
-          linear-gradient(#4ade80 1px, transparent 1px),
-          linear-gradient(90deg, #4ade80 1px, transparent 1px);
-        background-size: 20px 20px;
+        background-image: linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px); background-size: 20px 20px;
       }
       .hologram-emoji {
-        filter: sepia(100%) hue-rotate(80deg) saturate(300%) brightness(1.2)
-          drop-shadow(0px 0px 8px #4ade80);
+        filter: sepia(100%) hue-rotate(80deg) saturate(300%) brightness(1.2) drop-shadow(0px 0px 8px #4ade80);
       }
       .tactical-grid {
-        background-image:
-          linear-gradient(rgba(0, 255, 0, 0.03) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(0, 255, 0, 0.03) 1px, transparent 1px);
-        background-size: 40px 40px;
+        background-image: linear-gradient(rgba(0, 255, 0, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 255, 0, 0.03) 1px, transparent 1px); background-size: 40px 40px;
       }
     </style>
   </head>
@@ -55,8 +32,9 @@
     <script type="text/babel">
       const VisionRPSConsole = () => {
         const [page, setPage] = React.useState("HOME");
-        
         const [processedFrame, setProcessedFrame] = React.useState("");
+        const [debugText, setDebugText] = React.useState("INITIALIZING CAMERA...");
+        
         const videoRef = React.useRef(null);
         const canvasRef = React.useRef(null);
         const [streamActive, setStreamActive] = React.useState(false);
@@ -67,91 +45,89 @@
                 navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
                     if (videoRef.current) {
                         videoRef.current.srcObject = stream;
-                        // Force the video to play once the stream is attached
-                        videoRef.current.play().catch(e => console.log("Play error:", e));
+                        videoRef.current.play().catch(e => setDebugText("VIDEO PLAY ERROR: " + e.message));
                     }
                     setStreamActive(true);
-                }).catch(err => console.error("Webcam error:", err));
+                    setDebugText("CAMERA CONNECTED. AWAITING SERVER...");
+                }).catch(err => setDebugText("CAMERA PERMISSION DENIED OR UNAVAILABLE"));
             }
         }, [page, streamActive]);
 
-        // Send frames to Python 10 times a second
+        // Send frames to Python
         React.useEffect(() => {
             let interval;
             let isProcessing = false;
             if (page === 'GAME' && streamActive) {
                 interval = setInterval(async () => {
-                    // Check if the video is ACTUALLY playing and has data before we snap a picture
-                    if (isProcessing || !videoRef.current || !canvasRef.current || videoRef.current.readyState < 2) return;
+                    // Make sure video is fully loaded before drawing
+                    if (isProcessing || !videoRef.current || !canvasRef.current || videoRef.current.videoWidth === 0) return;
                     
                     isProcessing = true;
-                    const context = canvasRef.current.getContext('2d');
-                    context.drawImage(videoRef.current, 0, 0, 400, 300);
-                    const data = canvasRef.current.toDataURL('image/jpeg', 0.5);
                     try {
+                        const context = canvasRef.current.getContext('2d');
+                        context.drawImage(videoRef.current, 0, 0, 400, 300);
+                        const data = canvasRef.current.toDataURL('image/jpeg', 0.5);
+                        
                         const res = await fetch('/process_frame', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ image: data })
                         });
+                        
+                        if (!res.ok) {
+                            throw new Error(`PYTHON CRASH (HTTP ${res.status})`);
+                        }
+                        
                         const json = await res.json();
                         if (json.image) {
                             setProcessedFrame(json.image);
                         }
-                    } catch(e) {}
+                    } catch(e) {
+                        setDebugText("SERVER ERROR: Check Render Logs. " + e.message);
+                    }
                     isProcessing = false;
-                }, 100); 
+                }, 150); 
             }
             return () => clearInterval(interval);
         }, [page, streamActive]);
 
         const resetScores = async () => {
-          try {
-            await fetch("/reset");
-            console.log("Scores successfully reset");
-          } catch (error) {}
+          try { await fetch("/reset"); } catch (error) {}
         };
 
         return (
           <div className="min-h-screen relative flex items-center justify-center p-4 font-mono select-none tactical-grid">
             
-            {/* THE FIX: Changed 'hidden' to a 1px invisible dot so the browser doesn't freeze the camera */}
-            <video ref={videoRef} autoPlay playsInline muted className="fixed top-[-9999px] left-[-9999px]"></video>
+            {/* ROBUST VIDEO TAG: Visible to browser, but absolute and transparent so it doesn't break layout */}
+            <video ref={videoRef} autoPlay playsInline muted className="absolute w-[400px] h-[300px] opacity-0 pointer-events-none z-[-1]"></video>
             <canvas ref={canvasRef} width="400" height="300" className="hidden"></canvas>
             
             <div className="absolute top-10 left-10 text-[10px] text-green-500/20 hidden md:block">
-              SYS.INIT(100)<br /> KERNEL_LOADED<br /> WAITING_FOR_INPUT...<br /><br />
-              [0x00A1] MEMORY CLEAR<br />[0x00A2] CAMERA_LINK_ESTABLISHED
+              SYS.INIT(100)<br /> KERNEL_LOADED<br /> WAITING_FOR_INPUT...
             </div>
 
             <div className="absolute w-[700px] h-[700px] bg-blue-900/10 blur-[130px] rounded-full pointer-events-none"></div>
 
-            <div className="relative w-[440px] h-[720px] bg-[#2A2B30] rounded-[40px] border-[3px] border-[#4A4B50] shadow-[0_30px_60px_rgba(0,0,0,0.9),inset_0_2px_4px_rgba(255,255,255,0.1)] p-6 flex flex-col z-10">
-              <div className="absolute top-5 left-5 w-2 h-2 rounded-full bg-black shadow-[inset_0_1px_1px_rgba(255,255,255,0.3)]"></div>
-              <div className="absolute top-5 right-5 w-2 h-2 rounded-full bg-black shadow-[inset_0_1px_1px_rgba(255,255,255,0.3)]"></div>
-              <div className="absolute bottom-5 left-5 w-2 h-2 rounded-full bg-black shadow-[inset_0_1px_1px_rgba(255,255,255,0.3)]"></div>
-              <div className="absolute bottom-5 right-5 w-2 h-2 rounded-full bg-black shadow-[inset_0_1px_1px_rgba(255,255,255,0.3)]"></div>
+            <div className="relative w-[440px] h-[720px] bg-[#2A2B30] rounded-[40px] border-[3px] border-[#4A4B50] shadow-[0_30px_60px_rgba(0,0,0,0.9)] p-6 flex flex-col z-10">
+              <div className="absolute top-5 left-5 w-2 h-2 rounded-full bg-black shadow-inner"></div>
+              <div className="absolute top-5 right-5 w-2 h-2 rounded-full bg-black shadow-inner"></div>
+              <div className="absolute bottom-5 left-5 w-2 h-2 rounded-full bg-black shadow-inner"></div>
+              <div className="absolute bottom-5 right-5 w-2 h-2 rounded-full bg-black shadow-inner"></div>
 
               <div className="absolute -top-[3px] left-1/2 -translate-x-1/2 w-20 h-2.5 bg-red-500 rounded-b-md"></div>
-              <div className="absolute top-8 left-1/2 -translate-x-1/2 flex gap-2 opacity-40">
-                <div className="w-8 h-1.5 bg-black rounded-full shadow-inner"></div>
-                <div className="w-8 h-1.5 bg-black rounded-full shadow-inner"></div>
-                <div className="w-8 h-1.5 bg-black rounded-full shadow-inner"></div>
-              </div>
 
               <div className="absolute top-40 left-3 flex flex-col gap-4">
                 <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_6px_#4ADE80] animate-pulse"></div>
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500/50 shadow-inner"></div>
               </div>
 
-              <div className="w-full h-[360px] bg-[#0A100D] rounded-xl mt-12 mb-4 border-[4px] border-black relative overflow-hidden shadow-[0_0_20px_rgba(0,255,0,0.15)] flex flex-col p-4 text-[#4ADE80] custom-scanlines">
+              <div className="w-full h-[360px] bg-[#0A100D] rounded-xl mt-12 mb-4 border-[4px] border-black relative overflow-hidden flex flex-col p-4 text-[#4ADE80] custom-scanlines">
                 <div className="absolute inset-0 opacity-20 radar-bg"></div>
 
                 {page === "HOME" && (
                   <div className="relative z-10 flex flex-col items-center justify-center h-full text-center">
                     <h1 className="text-4xl font-black tracking-widest drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] mb-2">VISION RPS</h1>
-                    <p className="text-[11px] tracking-widest opacity-80 mb-8">HAND GESTURE ROCK PAPER SCISSORS</p>
-                    <div className="flex flex-col gap-3 w-full px-8 text-[11px]">
+                    <div className="flex flex-col gap-3 w-full px-8 text-[11px] mt-8">
                       <div className="flex justify-between items-center border-b border-green-800/50 pb-1"><span>[BLUE]</span> <span>PLAY SYSTEM</span></div>
                       <div className="flex justify-between items-center border-b border-green-800/50 pb-1"><span>[YELLOW]</span> <span>HOW TO PLAY</span></div>
                     </div>
@@ -164,10 +140,10 @@
                       <span>SYS.ONLINE</span>
                       <span className="bg-[#4ADE80] text-black px-1 font-bold tracking-widest">LIVE FEED</span>
                     </div>
-                    <div className="flex-grow border border-[#4ADE80] bg-black/50 mb-2 relative overflow-hidden flex items-center justify-center">
-                      {!processedFrame && <span className="animate-pulse text-[10px]">INITIALIZING CAMERA...</span>}
+                    <div className="flex-grow border border-[#4ADE80] bg-black/50 mb-2 relative overflow-hidden flex items-center justify-center text-center p-4">
+                      {!processedFrame && <span className="animate-pulse text-[10px] text-red-400">{debugText}</span>}
                       {processedFrame && (
-                        <img src={processedFrame} className="w-full h-full object-cover" alt="Camera Feed" />
+                        <img src={processedFrame} className="absolute inset-0 w-full h-full object-cover" alt="Camera Feed" />
                       )}
                     </div>
                   </div>
@@ -177,45 +153,25 @@
                   <div className="relative z-10 h-full flex flex-col text-[11px] leading-relaxed">
                     <h2 className="text-[14px] font-bold border-b border-[#4ADE80] pb-1 mb-4 text-center tracking-widest">SYSTEM PROTOCOLS</h2>
                     <div className="flex justify-between items-center mt-4 px-2">
-                      <div className="flex flex-col items-center">
-                        <div className="text-5xl mb-2 hologram-emoji">✊</div>
-                        <span className="text-[9px] text-center font-bold">ROCK<br />(0 FINGERS)</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <div className="text-5xl mb-2 hologram-emoji">✌️</div>
-                        <span className="text-[9px] text-center font-bold">SCISSORS<br />(2 FINGERS)</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <div className="text-5xl mb-2 hologram-emoji">🖐️</div>
-                        <span className="text-[9px] text-center font-bold">PAPER<br />(5 FINGERS)</span>
-                      </div>
-                    </div>
-                    <div className="mt-8 text-center border-t border-green-800/50 pt-2 text-[9px] opacity-80">
-                      PRESS BLUE TO START<br /> HOLD HAND STEADY FOR SCAN
+                      <div className="flex flex-col items-center"><div className="text-5xl mb-2 hologram-emoji">✊</div></div>
+                      <div className="flex flex-col items-center"><div className="text-5xl mb-2 hologram-emoji">✌️</div></div>
+                      <div className="flex flex-col items-center"><div className="text-5xl mb-2 hologram-emoji">🖐️</div></div>
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="flex justify-between w-full px-2 mb-6 items-end relative">
-                <div className="flex flex-col relative z-10">
-                  <div className="text-gray-400 font-bold text-[10px] tracking-widest">FIGTRON 1.0</div>
-                  <div className="text-gray-600 text-[7px] tracking-widest mt-0.5">1978 CV EDITION</div>
-                </div>
-              </div>
-
-              <div className="flex justify-between items-center px-4 mt-6 mb-16 relative z-10">
+              <div className="flex justify-between items-center px-4 mt-auto mb-16 relative z-10">
                 <div className="flex gap-4">
-                  <button onClick={() => setPage("GAME")} className="w-14 h-14 rounded-full bg-gradient-to-b from-blue-400 to-blue-600 shadow-[0_8px_0_#1e3a8a,0_12px_15px_rgba(0,0,0,0.6)] active:translate-y-[8px] active:shadow-[0_0px_0_#1e3a8a,0_0px_0px_rgba(0,0,0,0.6)] transition-all border-[3px] border-black focus:outline-none"></button>
-                  <button onClick={() => setPage("HOW_TO")} className="w-14 h-14 rounded-full bg-gradient-to-b from-yellow-400 to-yellow-600 shadow-[0_8px_0_#854d0e,0_12px_15px_rgba(0,0,0,0.6)] active:translate-y-[8px] active:shadow-[0_0px_0_#854d0e,0_0px_0px_rgba(0,0,0,0.6)] transition-all border-[3px] border-black focus:outline-none"></button>
-                  <button onClick={resetScores} className="w-14 h-14 rounded-full bg-gradient-to-b from-pink-400 to-pink-600 shadow-[0_8px_0_#831843,0_12px_15px_rgba(0,0,0,0.6)] active:translate-y-[8px] active:shadow-[0_0px_0_#831843,0_0px_0px_rgba(0,0,0,0.6)] transition-all border-[3px] border-black focus:outline-none"></button>
+                  <button onClick={() => setPage("GAME")} className="w-14 h-14 rounded-full bg-blue-500 shadow-[0_8px_0_#1e3a8a] active:translate-y-[8px] active:shadow-none border-[3px] border-black"></button>
+                  <button onClick={() => setPage("HOW_TO")} className="w-14 h-14 rounded-full bg-yellow-500 shadow-[0_8px_0_#854d0e] active:translate-y-[8px] active:shadow-none border-[3px] border-black"></button>
+                  <button onClick={resetScores} className="w-14 h-14 rounded-full bg-pink-500 shadow-[0_8px_0_#831843] active:translate-y-[8px] active:shadow-none border-[3px] border-black"></button>
                 </div>
-                <div className="w-20 h-10 bg-black rounded-full border-[3px] border-gray-700 p-1 relative shadow-inner cursor-pointer" onClick={() => setPage("HOME")}>
+                <div className="w-20 h-10 bg-black rounded-full border-[3px] border-gray-700 p-1 relative shadow-inner cursor-pointer" onClick={() => { setPage("HOME"); setProcessedFrame(""); setStreamActive(false); }}>
                   <div className={`w-7 h-7 rounded-full bg-gradient-to-b from-yellow-300 to-yellow-600 shadow-md transition-all duration-300 border-[2px] border-yellow-200 ${page === "HOME" ? "translate-x-0" : "translate-x-9"}`}></div>
                 </div>
               </div>
 
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-24 h-2 bg-black rounded-full opacity-60 shadow-inner"></div>
             </div>
           </div>
         );
