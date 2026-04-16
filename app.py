@@ -2,54 +2,39 @@ import cv2
 import mediapipe as mp
 import random
 import time
+from flask import Flask, render_template, Response, jsonify
 
-# Initialize
+app = Flask(__name__)
+
+# Initialize MediaPipe
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands()
+hands = mp_hands.Hands(max_num_hands=1)
 mp_draw = mp.solutions.drawing_utils
-
 tip_ids = [4, 8, 12, 16, 20]
 
-cap = cv2.VideoCapture(0)
-
-# Game variables
-start_time = 0
-countdown = 5
-result = ""
-player_score = 0
-computer_score = 0
-round_active = False
+# Global Score Tracker (So we can reset it from the web)
+game_data = {
+    "player_score": 0,
+    "computer_score": 0
+}
 
 def count_fingers(landmarks):
     fingers = []
-
-    # Thumb
-    if landmarks[tip_ids[0]][0] > landmarks[tip_ids[0]-1][0]:
-        fingers.append(1)
-    else:
-        fingers.append(0)
-
-    # Other fingers
+    if landmarks[tip_ids[0]][0] > landmarks[tip_ids[0]-1][0]: fingers.append(1)
+    else: fingers.append(0)
     for i in range(1, 5):
-        if landmarks[tip_ids[i]][1] < landmarks[tip_ids[i]-2][1]:
-            fingers.append(1)
-        else:
-            fingers.append(0)
-
+        if landmarks[tip_ids[i]][1] < landmarks[tip_ids[i]-2][1]: fingers.append(1)
+        else: fingers.append(0)
     return fingers.count(1)
 
 def get_gesture(finger_count):
-    if finger_count == 0:
-        return "Rock"
-    elif finger_count == 2:
-        return "Scissors"
-    elif finger_count == 5:
-        return "Paper"
+    if finger_count == 0: return "Rock"
+    elif finger_count == 2: return "Scissors"
+    elif finger_count == 5: return "Paper"
     return None
 
 def get_winner(player, computer):
-    if player == computer:
-        return "Draw"
+    if player == computer: return "Draw"
     elif (player == "Rock" and computer == "Scissors") or \
          (player == "Scissors" and computer == "Paper") or \
          (player == "Paper" and computer == "Rock"):
@@ -57,79 +42,113 @@ def get_winner(player, computer):
     else:
         return "Computer Wins"
 
-while True:
-    success, img = cap.read()
-    img = cv2.flip(img, 1)
-    h, w, c = img.shape
+def generate_frames():
+    global game_data
+    cap = cv2.VideoCapture(0)
+    
+    game_state = "IDLE" 
+    start_time = 0
+    result_text = ""
+    computer_move = ""
+    player_move_locked = ""
+    
+    font = cv2.FONT_HERSHEY_DUPLEX
+    NEON_GREEN = (50, 255, 50)
+    NEON_YELLOW = (0, 200, 255)
+    NEON_RED = (0, 0, 255)
 
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = hands.process(img_rgb)
+    while True:
+        success, img = cap.read()
+        if not success:
+            break
+        
+        img = cv2.flip(img, 1)
+        h, w, c = img.shape
+        
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = hands.process(img_rgb)
 
-    player_move = None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        display_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        
+        player_move = None
 
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            mp_draw.draw_landmarks(img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                mp_draw.draw_landmarks(
+                    display_img, hand_landmarks, mp_hands.HAND_CONNECTIONS,
+                    mp_draw.DrawingSpec(color=NEON_GREEN, thickness=2, circle_radius=2),
+                    mp_draw.DrawingSpec(color=(0, 200, 0), thickness=2)
+                )
+                landmarks = []
+                for id, lm in enumerate(hand_landmarks.landmark):
+                    cx, cy = int(lm.x * w), int(lm.y * h)
+                    landmarks.append((cx, cy))
+                
+                finger_count = count_fingers(landmarks)
+                player_move = get_gesture(finger_count)
 
-            landmarks = []
-            for id, lm in enumerate(hand_landmarks.landmark):
-                cx, cy = int(lm.x * w), int(lm.y * h)
-                landmarks.append((cx, cy))
+        current_time = time.time()
+        cv2.rectangle(display_img, (0, 0), (w, 140), (10, 15, 10), -1)
+        cv2.rectangle(display_img, (0, h - 60), (w, h), (10, 15, 10), -1)
 
-            finger_count = count_fingers(landmarks)
-            player_move = get_gesture(finger_count)
-
-    # Start round with 's'
-    key = cv2.waitKey(1)
-
-    if key == ord('s'):
-        start_time = time.time()
-        round_active = True
-        result = ""
-
-    if round_active:
-        elapsed = int(time.time() - start_time)
-        remaining = countdown - elapsed
-
-        cv2.putText(img, f'Show your move: {remaining}', (50, 100),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-        if remaining <= 0:
-            round_active = False
-
-            computer_move = random.choice(["Rock", "Paper", "Scissors"])
-
+        if game_state == "IDLE":
+            cv2.putText(display_img, "RAISE HAND TO START", (50, 60), font, 1.2, NEON_GREEN, 2)
             if player_move:
-                result = get_winner(player_move, computer_move)
+                game_state = "COUNTDOWN"
+                start_time = current_time
 
-                if result == "You Win":
-                    player_score += 1
-                elif result == "Computer Wins":
-                    computer_score += 1
+        elif game_state == "COUNTDOWN":
+            remaining = 3 - int(current_time - start_time)
+            if remaining > 0:
+                cv2.putText(display_img, f"SCANNING... {remaining}", (50, 60), font, 1.2, NEON_RED, 2)
+                if player_move:
+                    cv2.putText(display_img, f"DETECTED: {player_move}", (50, 110), font, 1, NEON_YELLOW, 2)
             else:
-                result = "No Move Detected"
-    else:
-        cv2.putText(img, "Press 'S' to Start", (50, 100),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                game_state = "RESULT"
+                start_time = current_time
+                computer_move = random.choice(["Rock", "Paper", "Scissors"])
+                
+                if player_move:
+                    player_move_locked = player_move
+                    result_text = get_winner(player_move_locked, computer_move)
+                    if result_text == "You Win": game_data["player_score"] += 1
+                    elif result_text == "Computer Wins": game_data["computer_score"] += 1
+                else:
+                    player_move_locked = "NONE"
+                    result_text = "NO HAND DETECTED"
 
-    # Display info
-    cv2.putText(img, f'Your Move: {player_move}', (50, 150),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        elif game_state == "RESULT":
+            elapsed = current_time - start_time
+            if elapsed < 4: 
+                cv2.putText(display_img, f"P1: {player_move_locked} vs CPU: {computer_move}", (30, 60), font, 1.0, NEON_GREEN, 2)
+                res_col = NEON_GREEN if result_text == "You Win" else NEON_RED if result_text == "Computer Wins" else NEON_YELLOW
+                cv2.putText(display_img, f"STATUS: {result_text}", (30, 110), font, 1.2, res_col, 2)
+            else:
+                game_state = "IDLE" 
 
-    if not round_active and 'computer_move' in locals():
-        cv2.putText(img, f'Computer: {computer_move}', (50, 200),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.putText(display_img, f"P1 SCORE: {game_data['player_score']} | CPU SCORE: {game_data['computer_score']}", (30, h - 20), font, 1.0, NEON_GREEN, 2)
 
-    cv2.putText(img, f'Result: {result}', (50, 250),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+        ret, buffer = cv2.imencode('.jpg', display_img)
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-    cv2.putText(img, f'You: {player_score}  Computer: {computer_score}', (50, 300),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-    cv2.imshow("Rock Paper Scissors", img)
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-    if key == 27:
-        break
+# NEW ROUTE: React calls this when Pink button is clicked
+@app.route('/reset')
+def reset():
+    global game_data
+    game_data["player_score"] = 0
+    game_data["computer_score"] = 0
+    return jsonify({"status": "success"})
 
-cap.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
